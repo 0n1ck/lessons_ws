@@ -1,6 +1,11 @@
 # Hidden files
 *.json
 geckodriver.exe
+simplescrape.py
+pagecache
+*.txt
+main copy*.py
+gqls
 
 
 # Byte-compiled / optimized / DLL files

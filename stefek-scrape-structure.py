@@ -1,3 +1,4 @@
+
 import json
 import datetime
 from uuid import uuid4
@@ -7,7 +8,7 @@ import asyncio
 from pathlib import Path
  
 from selenium import webdriver
-#from seleniumwire import webdriver
+from seleniumwire import webdriver
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.wait import WebDriverWait
@@ -17,10 +18,7 @@ from selenium.webdriver.firefox.options import Options as FirefoxOptions
 import getpass
 import aiohttp
 import requests
-
-import time
-from aiofile import AIOFile, Writer
-
+ 
 class DBWriter:
     def __init__(self, username="john.newbie@world.com", password="john.newbie@world.com"):
         self.username = username
@@ -50,10 +48,7 @@ class DBWriter:
  
     async def queryGQL(self, query, variables):
         # gqlurl = "http://host.docker.internal:33001/api/gql"
-        # gqlurl = "http://localhost:33001/api/gql"
-        
-        gqlurl = "http://160.216.228.102:33001/api/gql"
-
+        gqlurl = "http://localhost:33001/api/gql"
         token = self.token
         if token is None:
             token = await self.getToken()
@@ -357,49 +352,16 @@ class Analyzer:
     def __init__(self, username, password) -> None:
         self.username = username
         self.password = password
-        #self.writer = DBWriter() # using default user
+        self.writer = DBWriter() # using default user
         self.scraper = ScraperBase(self.username, self.password)
-
+       
     async def gatherPage(self, url, method):
         pageContent = self.scraper.openUrl(url)
         await method(pageContent)
-
-    async def read_file(self, filename):
-        try:
-            async with AIOFile(filename, 'r', encoding='utf-8') as afp:
-                contents = await afp.read()
-                return json.loads(contents)
-        except FileNotFoundError:
-            return []
-        except json.JSONDecodeError:
-            return []
-
-    async def write_to_file(self, filename, data):
-        current_data = await self.read_file(filename)
-        current_ids = {item["id"] for item in current_data}
-        
-        # Remove existing entries with the same id
-        new_data = [item for item in data if item["id"] not in current_ids]
-        
-        # Update existing entries with new data
-        for item in data:
-            if item["id"] in current_ids:
-                current_data = [d for d in current_data if d["id"] != item["id"]]
-                current_data.append(item)
-
-        current_data.extend(new_data)
-
-        async with AIOFile(filename, 'w', encoding='utf-8') as afp:
-            writer = Writer(afp)
-            await writer(json.dumps(current_data, ensure_ascii=False, indent=4))
-            await afp.fsync()
-
-
-    # Zůžený scrape na entity které se podařilo najít
-
-    async def plan_lessons(self, pageContent):
-        "z rozvrhu extrahuje plánované lekce"
-        aclessontypes = {
+ 
+    async def events(self, pageContent):
+        "z rozvrhu extrahuje udalosti"
+        eventtypes = {
             "Ostatní": "b87d3ff0-8fd4-11ed-a6d4-0242ac110002",
             "LAB": "b87d7b28-8fd4-11ed-a6d4-0242ac110002",
             "P": "b87d7be6-8fd4-11ed-a6d4-0242ac110002",
@@ -421,197 +383,28 @@ class Analyzer:
             "SMS": "b8803df4-8fd4-11ed-a6d4-0242ac110002",
         }
         jsonData = json.loads(pageContent)
-        plan_lessons = jsonData["events"]
-        count = 0
-        lessons_data = []
-
-        for plan_lesson in plan_lessons:
-            if "subjectId" not in plan_lesson:
-                continue
-            
-            # Simple data counter
-            count += 1
-            print(count)
-
-            planlesson_id = plan_lesson["subjectId"]
-            name = plan_lesson.get("subjectName", "Null")
-            order = plan_lesson.get("lessonOrder", "Null")
-            length = plan_lesson.get("lessonsCount", "Null")
-            topic_id = plan_lesson.get("topicId", "Null")
-            type_id = aclessontypes.get(plan_lesson.get("lessonFormName", "Ostatní"), "b87d3ff0-8fd4-11ed-a6d4-0242ac110002")
-
-            plan_lesson_entity = {
-                "id": planlesson_id,
-                "name": name,
-                "order": order,
-                "length": length,
-                "topic_id": topic_id,
-                "type_id": type_id,
-            }
-            
-            # Append only if not already in lessons_data
-            if plan_lesson_entity not in lessons_data:
-                lessons_data.append(plan_lesson_entity)
-
-        await self.write_to_file("systemdata.json", lessons_data)
+        events = jsonData["events"]
+        awaitables = []
+        for event in events:
+            outer_id = event["id"]
+            startdate = f'{event["dateCode"]}T{str(event["startTime"]["hours"]).zfill(2)}:{str(event["startTime"]["minutes"]).zfill(2)}:00'
+            enddate = f'{event["dateCode"]}T{str(event["endTime"]["hours"]).zfill(2)}:{str(event["endTime"]["minutes"]).zfill(2)}:00'
+            name = event.get("topic", event.get("subjectName", "Neuvedeno"))
+            type_id = eventtypes.get(event.get("lessonFormName", "Ostatní"), "b87d3ff0-8fd4-11ed-a6d4-0242ac110002")
+            event_entity = { "id": outer_id, "name": name, "startdate": startdate, "enddate": enddate, "type_id": type_id }
+            awaitables.append(self.writer.Create("events", variables=event_entity, outer_id=outer_id, outer_id_type_id="0c37b3e1-a937-4776-9543-37ae846411de"))
+            if len(awaitables) > 9:
+                await asyncio.gather(*awaitables)
+                awaitables = []
+        await asyncio.gather(*awaitables)
         return "ok"
-    
-
-    # Proposed structure with more entities
-
-    # async def plan_lessons(self, pageContent):
-    #     "z rozvrhu extrahuje plánované lekce"
-    #     aclessontypes = {
-    #         "Ostatní": "b87d3ff0-8fd4-11ed-a6d4-0242ac110002",
-    #         "LAB": "b87d7b28-8fd4-11ed-a6d4-0242ac110002",
-    #         "P": "b87d7be6-8fd4-11ed-a6d4-0242ac110002",
-    #         "CV": "b87d7c2c-8fd4-11ed-a6d4-0242ac110002",
-    #         "SEM": "b87d7ce0-8fd4-11ed-a6d4-0242ac110002",
-    #         "PV": "b87d7eb6-8fd4-11ed-a6d4-0242ac110002",
-    #         "ZK": "b87d82e4-8fd4-11ed-a6d4-0242ac110002",
-    #         "EX": "b87d8442-8fd4-11ed-a6d4-0242ac110002",
-    #         "STŽ": "b87d90e0-8fd4-11ed-a6d4-0242ac110002",
-    #         "KON": "b87d9266-8fd4-11ed-a6d4-0242ac110002",
-    #         "PX": "b87d9400-8fd4-11ed-a6d4-0242ac110002",
-    #         "TER": "b87d98c4-8fd4-11ed-a6d4-0242ac110002",
-    #         "KRZ": "b87e1010-8fd4-11ed-a6d4-0242ac110002",
-    #         "J": "b87e5796-8fd4-11ed-a6d4-0242ac110002",
-    #         "SMP": "b87e6380-8fd4-11ed-a6d4-0242ac110002",
-    #         "KOL": "b87e69b6-8fd4-11ed-a6d4-0242ac110002",
-    #         "SPK": "b87e6c04-8fd4-11ed-a6d4-0242ac110002",
-    #         "SZK": "b87f7cac-8fd4-11ed-a6d4-0242ac110002",
-    #         "SMS": "b8803df4-8fd4-11ed-a6d4-0242ac110002",
-    #     }
-    #     jsonData = json.loads(pageContent)
-    #     plan_lessons = jsonData["events"]
-    #     count = 0
-    #     lessons_data = []
-
-    #     for plan_lesson in plan_lessons:
-    #         if "subjectId" not in plan_lesson:
-    #             continue
-
-    #         count += 1
-    #         print(count)
-
-    #         planlesson_id = plan_lesson["subjectId"]
-    #         name = plan_lesson.get("subjectName", "Null")
-    #         order = plan_lesson.get("lessonOrder", "Null")
-    #         length = plan_lesson.get("lessonsCount", "Null")
-    #         startproposal = "null"
-    #         plan_id = ""
-    #         linkedlesson_id = "null"
-    #         topic_id = plan_lesson.get("topicId", "Null")
-    #         type_id = aclessontypes.get(plan_lesson.get("lessonFormName", "Ostatní"), "b87d3ff0-8fd4-11ed-a6d4-0242ac110002")
-    #         semester_id = "null"
-    #         #event_id = plan_lesson["id"]
-    #         created = ""
-    #         lastchange = ""
-    #         changedby = "null"
-    #         createdby = "null"
-
-    #         plan_lesson_entity = {
-    #             "id": planlesson_id,
-    #             "name": name,
-    #             "order": order,
-    #             "length": length,
-    #             "startproposal": startproposal,
-    #             "plan_id": plan_id,
-    #             "linkedlesson_id": linkedlesson_id,
-    #             "topic_id": topic_id,
-    #             "type_id": type_id,
-    #             "semester_id": semester_id,
-    #             #"event_id": event_id,
-    #             "created": created,
-    #             "lastchange": lastchange,
-    #             "changedby": changedby,
-    #             "createdby": createdby,
-    #         }
-    #         lessons_data.append(plan_lesson_entity)
-
-    #     await self.write_to_file("systemdata.json", lessons_data)
-    #     return "ok"
-
-    # Proposed structure with more entities and DBWriter?
-
-
-    # async def plan_lessons(self, pageContent):
-    #     "z url extrahuje plánované lekce"
-    #     aclessontypes = {
-    #         "Ostatní": "b87d3ff0-8fd4-11ed-a6d4-0242ac110002",
-    #         "LAB": "b87d7b28-8fd4-11ed-a6d4-0242ac110002",
-    #         "P": "b87d7be6-8fd4-11ed-a6d4-0242ac110002",
-    #         "CV": "b87d7c2c-8fd4-11ed-a6d4-0242ac110002",
-    #         "SEM": "b87d7ce0-8fd4-11ed-a6d4-0242ac110002",
-    #         "PV": "b87d7eb6-8fd4-11ed-a6d4-0242ac110002",
-    #         "ZK": "b87d82e4-8fd4-11ed-a6d4-0242ac110002",
-    #         "EX": "b87d8442-8fd4-11ed-a6d4-0242ac110002",
-    #         "STŽ": "b87d90e0-8fd4-11ed-a6d4-0242ac110002",
-    #         "KON": "b87d9266-8fd4-11ed-a6d4-0242ac110002",
-    #         "PX": "b87d9400-8fd4-11ed-a6d4-0242ac110002",
-    #         "TER": "b87d98c4-8fd4-11ed-a6d4-0242ac110002",
-    #         "KRZ": "b87e1010-8fd4-11ed-a6d4-0242ac110002",
-    #         "J": "b87e5796-8fd4-11ed-a6d4-0242ac110002",
-    #         "SMP": "b87e6380-8fd4-11ed-a6d4-0242ac110002",
-    #         "KOL": "b87e69b6-8fd4-11ed-a6d4-0242ac110002",
-    #         "SPK": "b87e6c04-8fd4-11ed-a6d4-0242ac110002",
-    #         "SZK": "b87f7cac-8fd4-11ed-a6d4-0242ac110002",
-    #         "SMS": "b8803df4-8fd4-11ed-a6d4-0242ac110002",
-    #     }
-    #     jsonData = json.loads(pageContent)
-    #     plan_lessons = jsonData["events"]
-    #     awaitables = []
-    #     for plan_lesson in plan_lessons:
-    #         planlesson_id = plan_lesson["subjectId"]
-    #         # startdate = f'{plan_lesson["dateCode"]}T{str(plan_lesson["startTime"]["hours"]).zfill(2)}:{str(plan_lesson["startTime"]["minutes"]).zfill(2)}:00'
-    #         # enddate = f'{plan_lesson["dateCode"]}T{str(plan_lesson["endTime"]["hours"]).zfill(2)}:{str(plan_lesson["endTime"]["minutes"]).zfill(2)}:00'
-    #         name = plan_lesson.get("subjectName", "Null")
-    #         order = plan_lesson.get("lessonOrder", "Null")
-    #         length = plan_lesson.get("lessonsCount", "Null")
-    #         startproposal = "null"
-    #         plan_id = ""
-    #         linkedlesson_id = "null"
-    #         topic_id = plan_lesson.get("topicId","Null")
-    #         # lessontype_id = aclessontypes.get(plan_lesson.get("lessonFormName", "Ostatní"), "b87d3ff0-8fd4-11ed-a6d4-0242ac110002")
-    #         type_id = aclessontypes.get(plan_lesson.get("lessonFormName", "Ostatní"), "b87d3ff0-8fd4-11ed-a6d4-0242ac110002")
-    #         semester_id = "null"
-    #         event_id = plan_lesson["id"]
-    #         created = ""
-    #         lastchange = ""
-    #         changedby = "null"
-    #         createdby = "null"
-
-    #         plan_lesson_entity = { "id": planlesson_id, 
-    #                               "name": name, 
-    #                               "order": order,
-    #                               "length": length,
-    #                               "startproposal": startproposal,
-    #                               "plan_id": plan_id,
-    #                               "linkedlesson_id": linkedlesson_id,
-    #                               "topic_id": topic_id,
-    #                               #"lessontype_id": lessontype_id,
-    #                               "type_id": type_id,
-    #                               "semester_id": semester_id,
-    #                               "event_id": event_id,
-    #                               "created": created,
-    #                               "lastchange": lastchange,
-    #                               "changeby": changedby,
-    #                               "createdby": createdby,
-
-    #         }
-    #         awaitables.append(self.writer.Create("plan_lessons", variables=plan_lesson_entity, outer_id=planlesson_id, outer_id_type_id="0c37b3e1-a937-4776-9543-37ae846411de"))
-    #         if len(awaitables) > 9:
-    #             await asyncio.gather(*awaitables)
-    #             awaitables = []
-    #     await asyncio.gather(*awaitables)
-    #     return "ok"
  
  
 password = ""
 password = getpass.getpass()
  
 username = "who@where.com"
-username = "jmeno.prijimeni@unob.cz" # Zde doplnit vlastní jméno a přijimení pro scrape
+username = "some.body@domain.com"
 # gatherVvi(username, password)
 # gatherDymado(username, password)
 async def gatherAsync(username, password):
@@ -633,13 +426,11 @@ async def gatherAsync(username, password):
     #     url="https://apl.unob.cz/dymado/odata/UnobDbUser_UserGroup/",
     #     method=analyser.dy_membership
     #     )
-
-    # events_awaitable = analyser.gatherPage(
-    #     url="https://apl.unob.cz/rozvrh/api/read/rozvrh?id=9",
-    #     method=analyser.events
-    #     )
-    # await events_awaitable
-
+    events_awaitable = analyser.gatherPage(
+        url="https://apl.unob.cz/rozvrh/api/read/rozvrh?id=9",
+        method=analyser.events
+        )
+    await events_awaitable
     # await asyncio.gather(dy_membership_awaitable, events_awaitable)
  
     # events_teachers_awaitable = analyser.gatherPage(
@@ -681,17 +472,11 @@ async def gatherAsync(username, password):
     #     url="https://apl.unob.cz/MojeAP/",
     #     method=analyser.ma_groups_structure
     #     )
-    
-    plan_lessons_awaitable = analyser.gatherPage(
-        url="https://apl.unob.cz/rozvrh/api/read/rozvrh?id=9",
-        method=analyser.plan_lessons
-        )
-    await plan_lessons_awaitable
-
-    # await analyser.gatherPage(
-    #     url="https://vav.unob.cz/persons/index",
-    #     method=analyser.vav_users_projects
-    # )    
+ 
+    await analyser.gatherPage(
+        url="https://vav.unob.cz/persons/index",
+        method=analyser.vav_users_projects
+    )    
     pass
  
 asyncio.run(gatherAsync(username=username, password=password))

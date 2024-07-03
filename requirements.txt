@@ -1,1 +1,7 @@
 selenium
+async-lru
+aiohttp
+requests
+beautifulsoup4
+
+aiofile
